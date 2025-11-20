@@ -58,37 +58,77 @@ function Assistant() {
   const [query, setQuery] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [voiceHint, setVoiceHint] = useState('');
   const recognitionRef = useRef(null);
 
   useEffect(() => {
     // Initialize Web Speech API if available
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
+      setSpeechSupported(true);
       const recognition = new SpeechRecognition();
       recognition.lang = 'en-US';
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
       recognition.onresult = (e) => {
-        const text = e.results[0][0].transcript;
-        setQuery(text);
-        handleAsk(text);
+        const text = e.results?.[0]?.[0]?.transcript || '';
+        if (text) {
+          setQuery(text);
+          handleAsk(text);
+        }
       };
       recognition.onend = () => setListening(false);
+      recognition.onerror = (e) => {
+        setListening(false);
+        const msg = e?.error === 'not-allowed'
+          ? 'Microphone access was blocked. Please allow mic permissions in your browser.'
+          : e?.error === 'no-speech'
+          ? 'No speech detected. Try speaking closer to the mic.'
+          : e?.message || e?.error || 'Voice recognition error.';
+        setResult({ error: msg });
+      };
       recognitionRef.current = recognition;
+
+      // Best-effort mic permission hint
+      try {
+        if (navigator?.permissions && navigator.permissions.query) {
+          navigator.permissions.query({ name: 'microphone' }).then((status) => {
+            if (status.state === 'denied') {
+              setVoiceHint('Microphone is blocked. Click the site info icon in your browser bar to allow it.');
+            } else if (status.state === 'prompt') {
+              setVoiceHint('When you tap Speak, your browser will ask for mic access.');
+            }
+          }).catch(() => {});
+        }
+      } catch {}
+    } else {
+      setSpeechSupported(false);
+      setVoiceHint('Voice input is not supported in this browser. Try Chrome or Edge on desktop, or Safari iOS 14+.');
     }
   }, []);
 
   const startListening = () => {
+    if (!speechSupported) {
+      setResult({ error: 'Voice input not supported in this browser.' });
+      return;
+    }
     if (recognitionRef.current && !listening) {
       setResult(null);
       setListening(true);
-      recognitionRef.current.start();
+      try {
+        recognitionRef.current.start();
+      } catch (err) {
+        // Start can throw if called rapidly or without user gesture
+        setListening(false);
+        setResult({ error: err?.message || 'Unable to start voice recognition. Please try again.' });
+      }
     }
   };
 
   const stopListening = () => {
     if (recognitionRef.current && listening) {
-      recognitionRef.current.stop();
+      try { recognitionRef.current.stop(); } catch {}
       setListening(false);
     }
   };
@@ -234,12 +274,20 @@ function Assistant() {
             </button>
             <button
               onClick={listening ? stopListening : startListening}
-              className={`px-4 py-3 rounded-xl border flex items-center gap-2 ${listening ? 'border-red-500/50 bg-red-500/10 text-red-300' : 'border-white/20 bg-white/5 text-white'}`}
+              disabled={!speechSupported}
+              title={!speechSupported ? 'Voice not supported in this browser' : ''}
+              className={`px-4 py-3 rounded-xl border flex items-center gap-2 ${
+                listening ? 'border-red-500/50 bg-red-500/10 text-red-300' : 'border-white/20 bg-white/5 text-white'
+              } ${!speechSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               {listening ? <StopCircle className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               {listening ? 'Stop' : 'Speak'}
             </button>
           </div>
+
+          {voiceHint && (
+            <div className="mt-2 text-xs text-slate-400">{voiceHint}</div>
+          )}
 
           {loading && (
             <div className="mt-4 text-slate-300 flex items-center gap-2">
